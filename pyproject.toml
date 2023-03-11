@@ -1,0 +1,15 @@
+[tool.poetry]
+name = "ngic-whisper"
+version = "0.1.0"
+description = ""
+authors = ["Christopher Biggs <christopher.l.biggs@gmail.com>"]
+readme = "README.md"
+packages = [{include = "ngic_whisper"}]
+
+[tool.poetry.dependencies]
+python = "^3.10"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
