@@ -1,3 +1,5 @@
+import logging
+
 from fastapi import FastAPI, File, UploadFile, Query, applications
 from fastapi.responses import StreamingResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
@@ -17,6 +19,8 @@ from threading import Lock
 
 SAMPLE_RATE = 16000
 LANGUAGE_CODES = sorted(list(LANGUAGES.keys()))
+
+logging.basicConfig(level=logging.NOTSET)
 
 projectMetadata = importlib.metadata.metadata('ngic-whisper')
 app = FastAPI(
@@ -51,9 +55,12 @@ if path.exists(assets_path + "/swagger-ui.css") and path.exists(assets_path + "/
     applications.get_swagger_ui_html = swagger_monkey_patch
 
 model_path = os.getenv("ASR_MODEL_PATH")
+logging.info('Loading Model from Path: "%s"', model_path)
 if torch.cuda.is_available():
+    logging.info('Using cuda device')
     model = WhisperModel(model_path, device="cuda")
 else:
+    logging.info('Using cpu device')
     model = WhisperModel(model_path, device="cpu")
 model_lock = Lock()
 
@@ -71,6 +78,7 @@ def transcribe(
         initial_prompt: Union[str, None] = Query(default=None),
         output: Union[str, None] = Query(default="txt", enum=["txt", "vtt", "srt", "tsv", "json"]),
 ):
+    logging.info('ASR Request Starting...')
     result = run_asr(audio_file.file, task, language, initial_prompt)
     filename = audio_file.filename.split('.')[0]
     outFile = StringIO()
@@ -87,12 +95,17 @@ def transcribe(
     else:
         return 'Please select an output method!'
     outFile.seek(0)
+
+    logging.info('Returning Response')
     return StreamingResponse(outFile, media_type="text/plain",
                              headers={'Content-Disposition': f'attachment; filename="{filename}.{output}"'})
 
 
 def run_asr(file: BinaryIO, task: Union[str, None], language: Union[str, None], initial_prompt: Union[str, None]):
+    logging.info('Loading Audio...')
     audio = load_audio(file)
+    logging.info('Audio Loaded')
+
     options_dict = {
         "task": task,
         "beam_size": 5}
@@ -101,7 +114,9 @@ def run_asr(file: BinaryIO, task: Union[str, None], language: Union[str, None], 
     if initial_prompt:
         options_dict["initial_prompt"] = initial_prompt
     with model_lock:
+        logging.info('Transcribing...')
         result = model.transcribe(audio, **options_dict)
+        logging.info('Transcribe Completed')
 
     return result
 
