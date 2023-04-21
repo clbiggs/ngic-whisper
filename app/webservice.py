@@ -72,26 +72,34 @@ if path.exists(assets_path + "/swagger-ui.css") and path.exists(assets_path + "/
 
 setupTimer.time_step("app-setup")
 
-whisper_model_name = os.getenv("ASR_MODEL", "base")
-logging.info("Using ASR model: '{}'".format(whisper_model_name))
+app.whisper_model_name = os.getenv("ASR_MODEL", "base")
+logging.info("Using ASR model: '{}'".format(app.whisper_model_name))
 
 faster_whisper_model_path_base = os.getenv("FAST_MODEL_PATH", "/root/.cache/faster_whisper")
 logging.info("Fast Model Path: '{}'".format(faster_whisper_model_path_base))
 
-faster_whisper_model_path = os.path.join(faster_whisper_model_path_base, whisper_model_name)
-faster_whisper_model_converter(whisper_model_name, faster_whisper_model_path)
-logging.info("Fast Model converted")
+app.whisper_model: any
+app.faster_whisper_model: any
+
+
+def load_model(model_name: str):
+    logging.info("Loading Model: '{}'".format(model_name))
+    faster_whisper_model_path = os.path.join(faster_whisper_model_path_base, model_name)
+    faster_whisper_model_converter(model_name, faster_whisper_model_path)
+    logging.info("Fast Model converted")
+
+    if torch.cuda.is_available():
+        logging.info("Using cuda device")
+        app.whisper_model = whisper.load_model(model_name).cuda()
+        app.faster_whisper_model = WhisperModel(faster_whisper_model_path, device="cuda", compute_type="float16")
+    else:
+        logging.info("Using cpu device")
+        app.whisper_model = whisper.load_model(model_name)
+        app.faster_whisper_model = WhisperModel(faster_whisper_model_path)
+
 
 setupTimer.time_step("whisper-model-setup")
-
-if torch.cuda.is_available():
-    logging.info("Using cuda device")
-    whisper_model = whisper.load_model(whisper_model_name).cuda()
-    faster_whisper_model = WhisperModel(faster_whisper_model_path, device="cuda", compute_type="float16")
-else:
-    logging.info("Using cpu device")
-    whisper_model = whisper.load_model(whisper_model_name)
-    faster_whisper_model = WhisperModel(faster_whisper_model_path)
+load_model(app.whisper_model_name)
 model_lock = Lock()
 
 setupTimer.time_step("whisper-model-loaded")
@@ -99,13 +107,29 @@ setupTimer.time_step("whisper-model-loaded")
 
 def get_model(method: str = "openai-whisper"):
     if method == "faster-whisper":
-        return faster_whisper_model
-    return whisper_model
+        return app.faster_whisper_model
+    return app.whisper_model
 
 
 @app.get("/", response_class=RedirectResponse, include_in_schema=False)
 async def index():
     return "/docs"
+
+
+@app.post("/changemodel", tags=["Endpoints"])
+def changemodel(
+        model: Union[str, None] = Query(default="base", enum=["tiny", "base", "small", "medium", "large", "large-v2"])
+):
+    if model is None or model == app.whisper_model_name:
+        return {"old_model": app.whisper_model_name, "new_model": app.whisper_model_name}
+
+    oldmodel = app.whisper_model_name
+
+    with model_lock:
+        load_model(model)
+        app.whisper_model_name = model
+
+    return {"old_model": oldmodel, "new_model": model}
 
 
 @app.post("/asr", tags=["Endpoints"])
@@ -116,7 +140,7 @@ def transcribe(
         initial_prompt: Union[str, None] = Query(default=None),
         audio_file: UploadFile = File(...),
         encode: bool = Query(default=True, description="Encode audio first through ffmpeg"),
-        output: Union[str, None] = Query(default="txt", enum=["txt", "vtt", "srt", "tsv", "json"])
+        output: Union[str, None] = Query(default="json", enum=["txt", "vtt", "srt", "tsv", "json"])
 ):
     result = run_asr(audio_file.file, task, language, initial_prompt, method, encode)
     filename = audio_file.filename.split('.')[0]
@@ -198,8 +222,9 @@ def run_asr(
         else:
             result = model.transcribe(audio, **options_dict)
 
-        result.method = method
-        result.gpu = torch.cuda.is_available()
+        result["method"] = method
+        result["gpu"] = torch.cuda.is_available()
+        result["model"] = app.whisper_model_name
 
         asrTimer.time_step("transcribed")
         asrTimer.stop()
