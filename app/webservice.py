@@ -1,4 +1,7 @@
+import datetime
 import logging
+import re
+import time
 
 from fastapi import FastAPI, File, UploadFile, Query, applications
 from fastapi.responses import StreamingResponse, RedirectResponse
@@ -142,8 +145,8 @@ def transcribe(
         encode: bool = Query(default=True, description="Encode audio first through ffmpeg"),
         output: Union[str, None] = Query(default="json", enum=["txt", "vtt", "srt", "tsv", "json"])
 ):
-    result = run_asr(audio_file.file, task, language, initial_prompt, method, encode)
     filename = audio_file.filename.split('.')[0]
+    result = run_asr(audio_file.file, task, language, initial_prompt, method, audio_file.filename, encode)
     myFile = StringIO()
     write_result(result, myFile, output, method)
     myFile.seek(0)
@@ -184,12 +187,13 @@ def run_asr(
         language: Union[str, None],
         initial_prompt: Union[str, None],
         method: Union[str, None],
+        fileid: Union[str, None],
         encode=True
 ):
     asrTimer = Timer(name="asrTimer")
     asrTimer.start()
 
-    audio = load_audio(file, encode)
+    audio, duration = load_audio(file, encode)
 
     asrTimer.time_step("loaded-audio")
 
@@ -225,6 +229,8 @@ def run_asr(
         result["method"] = method
         result["gpu"] = torch.cuda.is_available()
         result["model"] = app.whisper_model_name
+        result["length"] = duration
+        result["file_id"] = fileid
 
         asrTimer.time_step("transcribed")
         asrTimer.stop()
@@ -281,21 +287,26 @@ def load_audio(file: BinaryIO, encode=True, sr: int = SAMPLE_RATE):
     -------
     A NumPy array containing the audio waveform, in float32 dtype.
     """
+    duration = -1
     if encode:
         try:
             # This launches a subprocess to decode audio while down-mixing and resampling as necessary.
             # Requires the ffmpeg CLI and `ffmpeg-python` package to be installed.
-            out, _ = (
+            out, stdo = (
                 ffmpeg.input("pipe:", threads=0)
                 .output("-", format="s16le", acodec="pcm_s16le", ac=1, ar=sr)
                 .run(cmd="ffmpeg", capture_stdout=True, capture_stderr=True, input=file.read())
             )
+            matches = re.findall(r"time=(?P<duration>\d+:\d+:\d+[.]\d+)", stdo.decode(), re.IGNORECASE)
+            if len(matches) > 0:
+                x = time.strptime(matches[-1], '%H:%M:%S.%f')
+                duration = x.tm_sec + x.tm_min*60 + x.tm_hour*3600
         except ffmpeg.Error as e:
             raise RuntimeError(f"Failed to load audio: {e.stderr.decode()}") from e
     else:
         out = file.read()
 
-    return np.frombuffer(out, np.int16).flatten().astype(np.float32) / 32768.0
+    return np.frombuffer(out, np.int16).flatten().astype(np.float32) / 32768.0, duration
 
 
 setupTimer.stop()

@@ -90,10 +90,14 @@ then
     printf "Failed to create output directory\n"
     exit 5
 fi
-# Loop through all files in audio source directory
-for audioFile in "$audioSourceDir"/*;
+
+run_count=0
+
+# Loop through all files in audio source directory (shuffled)
+for audioFile in $(shuf -e "$audioSourceDir"/*);
 do
     for (( i = 0; i < iterations; i++ )); do
+        ((run_count=i+run_count))
         printf "Processing '%s' iteration %s\n" "$audioFile" "$((i+1))"
         full_filename=$(basename "$audioFile")
         extension="${full_filename##*.}"
@@ -124,7 +128,19 @@ do
     done
 done
 
+total_duration=$((SECONDS - test_start))
 
 printf "\n***************************\n"
-printf " Test Complete. '%s' seconds\n" "$((SECONDS - test_start))"
+printf " Test Complete. '%s' seconds\n" "$total_duration"
 printf "***************************\n\n"
+
+test_output_file=$(echo "${full_output_path:+$full_output_path/}test_details.txt" | sed 's#//#/#g')
+
+echo "----- Test Details -----" > "$test_output_file"
+{
+  echo "Name: $full_test_name"
+  echo "Iterations: $iterations"
+  echo "Total Runs: $run_count"
+  echo "Total Duration: $total_duration"
+  echo "API Url: $full_api_url"
+} >> "$test_output_file"
