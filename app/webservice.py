@@ -223,6 +223,8 @@ def run_asr(
                 "segments": segments,
                 "text": text,
             }
+            if duration < 0:
+                duration = info.duration
         else:
             result = model.transcribe(audio, **options_dict)
 
@@ -300,7 +302,7 @@ def load_audio(file: BinaryIO, encode=True, sr: int = SAMPLE_RATE):
             matches = re.findall(r"time=(?P<duration>\d+:\d+:\d+[.]\d+)", stdo.decode(), re.IGNORECASE)
             if len(matches) > 0:
                 x = time.strptime(matches[-1], '%H:%M:%S.%f')
-                duration = x.tm_sec + x.tm_min*60 + x.tm_hour*3600
+                duration = x.tm_sec + x.tm_min * 60 + x.tm_hour * 3600
         except ffmpeg.Error as e:
             raise RuntimeError(f"Failed to load audio: {e.stderr.decode()}") from e
     else:
