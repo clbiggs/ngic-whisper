@@ -97,7 +97,7 @@ run_count=0
 for audioFile in $(shuf -e "$audioSourceDir"/*);
 do
     for (( i = 0; i < iterations; i++ )); do
-        ((run_count=i+run_count))
+        ((run_count+=1))
         printf "Processing '%s' iteration %s\n" "$audioFile" "$((i+1))"
         full_filename=$(basename "$audioFile")
         extension="${full_filename##*.}"
