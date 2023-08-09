@@ -33,6 +33,9 @@ import importlib.metadata
 
 from .timer import Timer
 
+disableFastWhisper = os.getenv("DISABLE_FAST", "false") == "true"
+env_root_path = os.getenv("ROOT_PATH", "")
+
 setupTimer = Timer(name="setup")
 setupTimer.start()
 
@@ -53,7 +56,8 @@ app = FastAPI(
     license_info={
         "name": "MIT License",
         "url": projectMetadata['License']
-    }
+    },
+    root_path=env_root_path
 )
 
 assets_path = os.getcwd() + "/swagger-ui-assets"
@@ -76,40 +80,51 @@ if path.exists(assets_path + "/swagger-ui.css") and path.exists(assets_path + "/
 setupTimer.time_step("app-setup")
 
 app.whisper_model_name = os.getenv("ASR_MODEL", "base")
+app.compute_type = os.getenv("COMPUTE_TYPE", "float16")
 logging.info("Using ASR model: '{}'".format(app.whisper_model_name))
+logging.info("Using Compute type: '{}'".format(app.compute_type))
 
 faster_whisper_model_path_base = os.getenv("FAST_MODEL_PATH", "/root/.cache/faster_whisper")
 logging.info("Fast Model Path: '{}'".format(faster_whisper_model_path_base))
+
+if disableFastWhisper:
+    logging.info("!!!FAST MODEL DISABLED!!!")
 
 app.whisper_model: any
 app.faster_whisper_model: any
 
 
-def load_model(model_name: str):
+def load_model(model_name: str, compute_type: str):
     logging.info("Loading Model: '{}'".format(model_name))
     faster_whisper_model_path = os.path.join(faster_whisper_model_path_base, model_name)
-    faster_whisper_model_converter(model_name, faster_whisper_model_path)
-    logging.info("Fast Model converted")
+
+    if not disableFastWhisper:
+        faster_whisper_model_converter(model_name, app.compute_type, faster_whisper_model_path)
+        logging.info("Fast Model converted")
 
     if torch.cuda.is_available():
         logging.info("Using cuda device")
         app.whisper_model = whisper.load_model(model_name).cuda()
-        app.faster_whisper_model = WhisperModel(faster_whisper_model_path, device="cuda", compute_type="float16")
+
+        if not disableFastWhisper:
+            app.faster_whisper_model = WhisperModel(faster_whisper_model_path, device="cuda", compute_type=compute_type)
     else:
         logging.info("Using cpu device")
         app.whisper_model = whisper.load_model(model_name)
-        app.faster_whisper_model = WhisperModel(faster_whisper_model_path)
+
+        if not disableFastWhisper:
+            app.faster_whisper_model = WhisperModel(faster_whisper_model_path, compute_type=compute_type)
 
 
 setupTimer.time_step("whisper-model-setup")
-load_model(app.whisper_model_name)
+load_model(app.whisper_model_name, app.compute_type)
 model_lock = Lock()
 
 setupTimer.time_step("whisper-model-loaded")
 
 
 def get_model(method: str = "openai-whisper"):
-    if method == "faster-whisper":
+    if method == "faster-whisper" and (not disableFastWhisper):
         return app.faster_whisper_model
     return app.whisper_model
 
@@ -129,7 +144,7 @@ def changemodel(
     oldmodel = app.whisper_model_name
 
     with model_lock:
-        load_model(model)
+        load_model(model, app.compute_type)
         app.whisper_model_name = model
 
     return {"old_model": oldmodel, "new_model": model}
@@ -145,6 +160,9 @@ def transcribe(
         encode: bool = Query(default=True, description="Encode audio first through ffmpeg"),
         output: Union[str, None] = Query(default="json", enum=["txt", "vtt", "srt", "tsv", "json"])
 ):
+    if method == "faster-whisper" and disableFastWhisper:
+        method = "openai-whisper"
+
     filename = audio_file.filename.split('.')[0]
     result = run_asr(audio_file.file, task, language, initial_prompt, method, audio_file.filename, encode)
     myFile = StringIO()
@@ -163,6 +181,9 @@ def language_detection(
     # load audio and pad/trim it to fit 30 seconds
     audio = load_audio(audio_file.file, encode)
     audio = whisper.pad_or_trim(audio)
+
+    if method == "faster-whisper" and disableFastWhisper:
+        method = "openai-whisper"
 
     # detect the spoken language
     with model_lock:
